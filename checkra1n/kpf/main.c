@@ -139,20 +139,70 @@ static void kpf_kernel_version_init(xnu_pf_range_t *text_const_range)
     const char *start = kernelVersionString + strlen(kernelVersionStringMarker);
     char *end = NULL;
     errno = 0;
+
     gKernelVersion.darwinMajor = strtoimax(start, &end, 10);
-    if(errno) panic("Error parsing kernel version");
+    if(errno || *end != '.') panic("Error parsing darwin version");
     start = end+1;
     gKernelVersion.darwinMinor = strtoimax(start, &end, 10);
-    if(errno) panic("Error parsing kernel version");
+    if(errno || *end != '.') panic("Error parsing darwin version");
     start = end+1;
     gKernelVersion.darwinRevision = strtoimax(start, &end, 10);
-    if(errno) panic("Error parsing kernel version");
+    if(errno || *end != ':') panic("Error parsing darwin version");
+
     start = strstr(end, "root:xnu");
     if(start) start = strchr(start + strlen("root:xnu"), '-');
-    if(!start) panic("Error parsing kernel version");
+    if(!start) panic("Error parsing xnu version");
     gKernelVersion.xnuMajor = strtoimax(start+1, &end, 10);
-    if(errno) panic("Error parsing kernel version");
-    printf("Detected Kernel version Darwin: %d.%d.%d xnu: %d\n", gKernelVersion.darwinMajor, gKernelVersion.darwinMinor, gKernelVersion.darwinRevision, gKernelVersion.xnuMajor);
+    if(errno) panic("Error parsing xnu version");
+    if(*end == '.')
+    {
+        start = end+1;
+        gKernelVersion.xnuMinor = strtoimax(start, &end, 10);
+        if(errno || *end != '.') panic("Error parsing xnu version");
+        start = end+1;
+        gKernelVersion.xnuPatch = strtoimax(start, &end, 10);
+        if(errno) panic("Error parsing xnu version");
+        if(*end == '.')
+        {
+            start = end+1;
+            gKernelVersion.xnuFlags = strtoimax(start, &end, 10);
+            if(errno) panic("Error parsing xnu version");
+            if(*end == '.')
+            {
+                start = end+1;
+                gKernelVersion.xnuRevision = strtoimax(start, &end, 10);
+                if(errno) panic("Error parsing xnu version");
+            }
+            else
+            {
+                // If we have only four groups, then we assume "patch" is missing.
+                gKernelVersion.xnuRevision = gKernelVersion.xnuFlags;
+                gKernelVersion.xnuFlags = gKernelVersion.xnuPatch;
+                gKernelVersion.xnuPatch = 0;
+            }
+        }
+    }
+    if(*end != '~') panic("Error parsing xnu version");
+    start = end+1;
+    gKernelVersion.xnuRun = strtoimax(start, &end, 10);
+    if(errno || *end != '/') panic("Error parsing xnu version");
+
+    start = strrchr(end + 1, '_');
+    if(!start) panic("Error parsing machine config");
+    start += 1;
+    // This is ghetto because machineConfig doesn't differentiate between the two A9 flavours or A9X, A10 vs T2,
+    // and a lot of the time not even between A10 and A10X, A8 vs A8X, etc... obviously not consistent across versions either.
+    // But we need something that works in kpf-test, and this is exclusive to DEV_BUILD anyway, so whatever.
+    if  (strcmp(start, "S5L8960X") == 0) gKernelVersion.machineConfig = 0x8960;
+    else if(strcmp(start, "T7000") == 0) gKernelVersion.machineConfig = 0x7000;
+    else if(strcmp(start, "T7001") == 0) gKernelVersion.machineConfig = 0x7001;
+    else if(strcmp(start, "S8000") == 0) gKernelVersion.machineConfig = 0x8000;
+    else if(strcmp(start, "T8010") == 0) gKernelVersion.machineConfig = 0x8010;
+    else if(strcmp(start, "T8011") == 0) gKernelVersion.machineConfig = 0x8011;
+    else if(strcmp(start, "T8015") == 0) gKernelVersion.machineConfig = 0x8015;
+    else                                 panic("Unknown machine config: %s", start);
+
+    printf("Detected Kernel version Darwin: %d.%d.%d xnu: %d.%d.%d.%d.%d~%d machine: %04hx\n", gKernelVersion.darwinMajor, gKernelVersion.darwinMinor, gKernelVersion.darwinRevision, gKernelVersion.xnuMajor, gKernelVersion.xnuMinor, gKernelVersion.xnuPatch, gKernelVersion.xnuFlags, gKernelVersion.xnuRevision, gKernelVersion.xnuRun, gKernelVersion.machineConfig);
 }
 #endif
 
