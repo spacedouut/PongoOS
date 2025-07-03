@@ -1338,18 +1338,18 @@ void kpf_amfi_kext_patches(xnu_pf_patchset_t* patchset) {
     // 0xfffffff008b0ad5c      210e0054       b.ne 0xfffffff008b0af20
     //
     // r2:
-    // /x 3f680171000000543f6c017101000054:ffffffff1f0000ffffffffff1f0000ff
+    // /x 3f680171000000543f6c017100000054:ffffffff1f0000ffffffffff1e0000ff
     uint64_t iiii_matches[] = {
         0x7101683f, // cmp w1, 0x5a
         0x54000000, // b.eq
         0x71016c3f, // cmp w1, 0x5b
-        0x54000001, // b.ne
+        0x54000000, // b.eq / b.ne
     };
     uint64_t iiii_masks[] = {
         0xffffffff,
         0xff00001f,
         0xffffffff,
-        0xff00001f,
+        0xff00001e,
     };
     xnu_pf_maskmatch(patchset, "amfi_mac_syscall_low", iiii_matches, iiii_masks, sizeof(iiii_matches)/sizeof(uint64_t), false, (void*)kpf_amfi_mac_syscall_low);
 }
