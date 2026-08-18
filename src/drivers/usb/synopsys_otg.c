@@ -131,6 +131,69 @@ static const char *string_descriptors[] = {
 
 static const uint32_t string_descriptor_count = sizeof(string_descriptors) / sizeof(string_descriptors[0]);
 
+// ---- AimPad: HID pen digitizer interface (M2) ------------------------------------------------
+//
+// Adds a second USB interface (class 0x03, HID) presenting a pen digitizer that reports in
+// the J96 touch controller's native sensor units (X 0..11980, Y 0..15974). This makes the
+// PongoOS device enumerate as a real, stock-visible HID drawing tablet on Linux/OTD/Windows.
+
+struct hid_descriptor {
+	uint8_t  bLength;		// 9
+	uint8_t  bDescriptorType;	// 0x21 (HID)
+	uint16_t bcdHID;		// 0x0110
+	uint8_t  bCountryCode;		// 0
+	uint8_t  bNumDescriptors;	// 1
+	uint8_t  bDescriptorType2;	// 0x22 (Report)
+	uint16_t wDescriptorLength;
+} __attribute__((packed));
+
+// Pen digitizer report descriptor (72 bytes). Report layout (7 bytes, little-endian):
+//   [0] Report ID = 0x01
+//   [1] buttons+flags: bit0 Tip, bit1 Barrel, bit2 Eraser, bit3 In-Range, bits4-7 pad
+//   [2..3] X (16-bit LE, 0..11980)
+//   [4..5] Y (16-bit LE, 0..15974)
+//   [6]   Pressure (0..255)
+static const uint8_t hid_report_descriptor[] = {
+	0x05, 0x0D,		// Usage Page (Digitizers)
+	0x09, 0x02,		// Usage (Pen)
+	0xA1, 0x01,		// Collection (Application)
+	0x85, 0x01,		//   Report ID (1)
+	0x09, 0x20,		//   Usage (Stylus)
+	0xA1, 0x00,		//   Collection (Physical)
+	0x09, 0x42,		//     Usage (Tip Switch)
+	0x09, 0x44,		//     Usage (Barrel Switch)
+	0x09, 0x45,		//     Usage (Eraser)
+	0x15, 0x00,		//     Logical Minimum (0)
+	0x25, 0x01,		//     Logical Maximum (1)
+	0x75, 0x01,		//     Report Size (1)
+	0x95, 0x03,		//     Report Count (3)
+	0x81, 0x02,		//     Input (Data,Var,Abs)
+	0x09, 0x32,		//     Usage (In Range)
+	0x81, 0x02,		//     Input (Data,Var,Abs)
+	0x95, 0x01,		//     Report Count (1)
+	0x75, 0x04,		//     Report Size (4)
+	0x81, 0x03,		//     Input (Const,Var,Abs)
+	0x05, 0x01,		//   Usage Page (Generic Desktop)
+	0x09, 0x30,		//   Usage (X)
+	0x75, 0x10,		//   Report Size (16)
+	0x95, 0x01,		//   Report Count (1)
+	0x26, 0xEC, 0x2E,	//   Logical Maximum (11980)
+	0x81, 0x02,		//   Input (Data,Var,Abs)
+	0x09, 0x31,		//   Usage (Y)
+	0x26, 0x66, 0x3E,	//   Logical Maximum (15974)
+	0x81, 0x02,		//   Input (Data,Var,Abs)
+	0x05, 0x0D,		//   Usage Page (Digitizers)
+	0x09, 0x30,		//   Usage (Tip Pressure)
+	0x75, 0x08,		//   Report Size (8)
+	0x95, 0x01,		//   Report Count (1)
+	0x25, 0xFF,		//   Logical Maximum (255)
+	0x81, 0x02,		//   Input (Data,Var,Abs)
+	0xC0,			//   End Collection (Physical)
+	0xC0			//   End Collection (Application)
+};
+
+static void hid_send_test_report(void);
+
 struct device_descriptor device_descriptor = {
 	.bLength            = sizeof(struct device_descriptor),
 	.bDescriptorType    = 1,
@@ -153,6 +216,9 @@ struct full_configuration_descriptor {
 	struct interface_descriptor     interface;
 	struct endpoint_descriptor      endpoint_81;
 	struct endpoint_descriptor      endpoint_02;
+	struct interface_descriptor     interface_hid;
+	struct hid_descriptor           hid;
+	struct endpoint_descriptor      endpoint_83;
 } __attribute__((packed));
 
 struct full_configuration_descriptor configuration_descriptor = {
@@ -160,7 +226,7 @@ struct full_configuration_descriptor configuration_descriptor = {
 		.bLength             = sizeof(configuration_descriptor.configuration),
 		.bDescriptorType     = 2,
 		.wTotalLength        = sizeof(configuration_descriptor),
-		.bNumInterfaces      = 1,
+		.bNumInterfaces      = 2,
 		.bConfigurationValue = 1,
 		.iConfiguration      = iProduct,
 		.bmAttributes        = 0x80,
@@ -192,6 +258,34 @@ struct full_configuration_descriptor configuration_descriptor = {
 	        .bmAttributes     = 2,        // Bulk
 	        .wMaxPacketSize   = BULK_EP_MAX_PACKET_SIZE,
 	        .bInterval        = 0,
+	},
+	.interface_hid = {
+		.bLength            = sizeof(configuration_descriptor.interface_hid),
+		.bDescriptorType    = 4,
+		.bInterfaceNumber   = 1,
+		.bAlternateSetting  = 0,
+		.bNumEndpoints      = 1,
+		.bInterfaceClass    = 0x03,
+		.bInterfaceSubClass = 0x00,
+		.bInterfaceProtocol = 0x00,
+		.iInterface         = 0,
+	},
+	.hid = {
+		.bLength             = sizeof(configuration_descriptor.hid),
+		.bDescriptorType     = 0x21,
+		.bcdHID              = 0x0110,
+		.bCountryCode        = 0,
+		.bNumDescriptors     = 1,
+		.bDescriptorType2    = 0x22,
+		.wDescriptorLength   = sizeof(hid_report_descriptor),
+	},
+	.endpoint_83 = {
+		.bLength          = sizeof(configuration_descriptor.endpoint_83),
+		.bDescriptorType  = 5,
+		.bEndpointAddress = 0x83,    // IN
+		.bmAttributes     = 3,        // Interrupt
+		.wMaxPacketSize   = 64,
+		.bInterval        = 1,
 	},
 };
 
@@ -368,6 +462,14 @@ ep0_get_descriptor_request(struct setup_packet *setup) {
 			return true;
 		case 3:		// String descriptor
 			return get_string_descriptor(index);
+		case 0x21:	// HID descriptor (HID interface 1)
+			ep0_begin_data_in_stage(&configuration_descriptor.hid,
+					sizeof(configuration_descriptor.hid), NULL);
+			return true;
+		case 0x22:	// Report descriptor (HID interface 1)
+			ep0_begin_data_in_stage(hid_report_descriptor,
+					sizeof(hid_report_descriptor), NULL);
+			return true;
 		default:
 			goto invalid;
 	}
@@ -545,6 +647,7 @@ static struct endpoint_state ep0_in;
 static struct endpoint_state ep0_out;
 static struct endpoint_state ep1_in;
 static struct endpoint_state ep2_out;
+static struct endpoint_state ep3_in;
 
 // ---- Low-level transfer API for IN endpoints ---------------------------------------------------
 
@@ -1176,6 +1279,7 @@ usb_reset() {
     ep_in_abort(&ep0_in);
     ep_in_abort(&ep1_in);
     ep_in_abort(&ep2_out);
+    ep_in_abort(&ep3_in);
     usb_set_address(0);
     reg_write(rDOEPMSK, 0);
     reg_write(rDIEPMSK, 0);
@@ -1202,7 +1306,11 @@ usb_reset() {
     ep_type = configuration_descriptor.endpoint_02.bmAttributes;
     ep_mps = configuration_descriptor.endpoint_02.wMaxPacketSize;
     ep_out_activate(&ep2_out, 2, ep_type, ep_mps);
+    ep_type = configuration_descriptor.endpoint_83.bmAttributes;
+    ep_mps = configuration_descriptor.endpoint_83.wMaxPacketSize;
+    ep_in_activate(&ep3_in, 3, ep_type, ep_mps, 4);
     ep_out_recv(&ep0_out);
+    hid_send_test_report();
 }
 
 // ---- USB transfer API --------------------------------------------------------------------------
@@ -1232,6 +1340,7 @@ static struct control_transfer_state ep0;
 // State for other endpoints.
 struct transfer_state ep1;
 struct transfer_state ep2;
+struct transfer_state ep3;
 
 // You may try to send more data than was requested, but the request will be truncated to the size
 // requested by the host.
@@ -1273,6 +1382,9 @@ lookup_endpoint(uint8_t ep_addr, int dir_in,
         if (ep_addr == 0x81) {
             *ep = &ep1_in;
             *state = &ep1;
+        } else if (ep_addr == 0x83) {
+            *ep = &ep3_in;
+            *state = &ep3;
         }
     } else {
         if (ep_addr == 0x02) {
@@ -1298,6 +1410,25 @@ usb_in_transfer(uint8_t ep_addr, const void *data, uint32_t size, void (*callbac
     }
     state->in_transfer_done = callback;
     ep_in_send_data(ep, data, size);
+}
+
+// ---- AimPad HID: test report pump (M2) --------------------------------------------------------
+
+static void
+hid_report_sent(void) {
+    // Transfer complete; nothing else to do (report is static, can be re-queued).
+}
+
+// Send a single HID report on EP 0x83 so a host can observe the digitizer actually emitting data.
+// Report: id=1, Tip+In-Range set, X=0, Y=0, pressure=128. Buffered statically so it stays alive
+// for the whole transfer.
+static void
+hid_send_test_report(void) {
+    static uint8_t report[7] = { 0x01, 0x09, 0x00, 0x00, 0x00, 0x00, 0x80 };
+    if (ep3.in_transfer_done != NULL) {
+        return;    // previous report still pending (spike safety)
+    }
+    usb_in_transfer(0x83, report, sizeof(report), hid_report_sent);
 }
 
 void
@@ -1667,6 +1798,33 @@ ep2_out_interrupt() {
 }
 
 static void
+ep3_in_interrupt() {
+	uint32_t diepint = reg_read(rDIEPINT(3));
+	reg_write(rDIEPINT(3), diepint);
+	USB_DEBUG(USB_DEBUG_INTR, "DIEPINT(3) %x", diepint);
+	if (diepint & 0x1) {
+		bool done = ep_in_send_done(&ep3_in);
+		if (done) {
+			USB_DEBUG(USB_DEBUG_APP, "EP%u IN done", ep3_in.n);
+			if (ep3.in_transfer_done == NULL) {
+				BUG(0x6e6f203369206362);	// 'no 3i cb'
+			}
+			void (*in_transfer_done)(void) = ep3.in_transfer_done;
+			ep3.in_transfer_done = NULL;
+			in_transfer_done();
+		}
+	}
+	if (diepint & 0x8) {
+		USB_DEBUG(USB_DEBUG_STAGE | USB_DEBUG_INTR, "TIMEOUT");
+		USB_DEBUG_ABORT();
+	}
+	if (diepint & 0x4) {
+		BUG(0x61686220696e2033);	// 'ahb in 3'
+	}
+}
+
+
+static void
 usb_ep_interrupt() {
 	uint32_t daint = reg_read(rDAINT);
 	if (daint != 0) {
@@ -1677,6 +1835,9 @@ usb_ep_interrupt() {
     }
     if (daint & (1 << (1))) {
         ep1_in_interrupt();
+    }
+    if (daint & (1 << (3))) {
+        ep3_in_interrupt();
     }
     if (daint & (1 << (16 + 0))) {
         ep0_out_interrupt();
