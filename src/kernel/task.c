@@ -24,6 +24,7 @@
  * SOFTWARE.
  * 
  */
+#include <stdarg.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <pongo.h>
